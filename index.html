@@ -86,6 +86,7 @@ h2{margin:0 0 10px;font-size:19px;color:var(--g)}
  <div class="copy" data-t="copy"></div><span data-t="disc"></span>
 </div>
 </div>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script>
 // Each: question|correct|wrong1|wrong2|wrong3
 const RAW=`Who is called the Father of the Indian Constitution?|Dr B.R. Ambedkar|Jawaharlal Nehru|Mahatma Gandhi|Sardar Patel
@@ -533,23 +534,66 @@ const tr=c=>lang==="od"?(OD[c.q]||null):null;
 const pend=false;function need(){}
 const tt=k=>T[lang][k];
 const tok=(()=>{try{let t=localStorage.getItem("pqzt");if(!t){t=Math.random().toString(36).slice(2)+Date.now();localStorage.setItem("pqzt",t)}return t}catch(e){return "x"+Math.random()}})();
+// One nickname per browser/device profile (stored locally).
+const DEVICE_NICK_KEY="pqz_device_nickname";
+let savedDeviceNick="";
+try{savedDeviceNick=(localStorage.getItem(DEVICE_NICK_KEY)||"").trim()}catch(e){}
 const $=id=>document.getElementById(id);
 const shuf=a=>{a=a.slice();for(let i=a.length-1;i>0;i--){const j=Math.random()*(i+1)|0;[a[i],a[j]]=[a[j],a[i]]}return a};
 const esc=s=>s.replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 let db=null,board=[],nick="",qs=[],i=0,score=0,lock=false,ended=false,pending=null,unsub=null;
 const key=n=>Array.from(n.toLowerCase()).map(c=>c.codePointAt(0).toString(16)).join("-");
-const isOn=()=>true;
+// ====== SHARED LEADERBOARD (Supabase REST API) ======
+const SUPABASE_URL = "https://axgduvrlrbmiftnemwd.supabase.co";
+const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_qTdq6KFYSYoelrLxyZvKaQ_2FGNEHI6";
+let online=false,sentScore=-1,unsubB=null;
+const tableUrl = `${SUPABASE_URL}/rest/v1/Leaderboard`;
+const apiHeaders = {
+  apikey: SUPABASE_PUBLISHABLE_KEY,
+  Authorization: `Bearer ${SUPABASE_PUBLISHABLE_KEY}`,
+  "Content-Type": "application/json"
+};
+function setOnline(v){online=v;$("off").classList.toggle("hide",v);$("offm").textContent=tt("offOn");status()}
+function status(){$("net").textContent=online?tt("onl"):tt("conn")}
 function drawBoard(){
- const list=board.slice().sort((a,b)=>b.score-a.score).slice(0,50);
- const medal=["🥇","🥈","🥉"];
- const h=list.length?list.map((r,k)=>`<div class="row${r.name===nick?" me":""}"><span class="rk">${medal[k]||k+1}</span><span class="nm">${esc(r.name)}</span><span class="sc">${r.score} ${tt("sw")}</span></div>`).join(""):`<div class="note">${tt("none")}</div>`;
- $("lb").innerHTML=h;$("lb2").innerHTML=h;
+ const sorted=board.slice().sort((a,b)=>b.score-a.score||a.name.localeCompare(b.name)).slice(0,50);
+ [$("lb"),$("lb2")].forEach(box=>{
+  box.innerHTML="";
+  if(!sorted.length){const empty=document.createElement("div");empty.className="note";empty.textContent=tt("none");box.appendChild(empty);return;}
+  sorted.forEach((p,index)=>{
+   const row=document.createElement("div");row.className="row"+(nick&&p.name.toLowerCase()===nick.toLowerCase()?" me":"");
+   const rank=document.createElement("span");rank.className="rk";rank.textContent=String(index+1);
+   const name=document.createElement("span");name.className="nm";name.textContent=p.name;
+   const points=document.createElement("span");points.className="sc";points.textContent=`${p.score} ${tt("sw")}`;
+   row.append(rank,name,points);box.appendChild(row);
+  });
+ });
 }
-function loadBoard(){try{board=JSON.parse(localStorage.getItem("pqzb")||"[]")}catch(e){board=[]}drawBoard()}
-function status(){$("net").textContent=lang==="od"?"ଅଫଲାଇନ୍ ମୋଡ୍ • ଇଣ୍ଟରନେଟ୍ ଦରକାର ନାହିଁ ✅":"Offline mode • no internet needed ✅";$("off").classList.add("hide")}
-function flush(){}
-function push(){const r=board.find(x=>x.name===nick);if(!r)board.push({name:nick,score});else if(r.score<score)r.score=score;try{localStorage.setItem("pqzb",JSON.stringify(board))}catch(e){}drawBoard()}
-async function connect(){loadBoard();status()}
+async function connect(){
+ try{
+  const response=await fetch(`${tableUrl}?select=player_name,score&order=score.desc&limit=1000`,{headers:apiHeaders,cache:"no-store"});
+  if(!response.ok)throw new Error(`Leaderboard load failed (${response.status})`);
+  const rows=await response.json();
+  const best=new Map();
+  rows.forEach(r=>{
+   if(!r||!r.player_name)return;
+   const name=String(r.player_name).trim();if(!name)return;
+   const k=name.toLocaleLowerCase();const value=Number(r.score)||0;
+   if(!best.has(k)||value>best.get(k).score)best.set(k,{name,score:value});
+  });
+  board=Array.from(best.values());setOnline(true);drawBoard();
+ }catch(error){console.error(error);setOnline(false);drawBoard();}
+}
+async function push(){
+ if(!nick||score<=sentScore)return;
+ const value=score;
+ try{
+  const response=await fetch(tableUrl,{method:"POST",headers:{...apiHeaders,Prefer:"return=minimal"},body:JSON.stringify({player_name:nick,score:value})});
+  if(!response.ok)throw new Error(`Score save failed (${response.status}): ${await response.text()}`);
+  sentScore=value;setOnline(true);await connect();
+ }catch(error){console.error(error);setOnline(false);}
+}
+window.addEventListener("online",connect);window.addEventListener("offline",()=>setOnline(false));
 const fx=e=>{e.classList.remove("fx");void e.offsetWidth;e.classList.add("fx")};
 function show(id){["home","quiz","end"].forEach(x=>$(x).classList.toggle("hide",x!==id));window.scrollTo(0,0);fx($(id))}
 function ask(){lock=false;order=shuf([0,1,2,3]);draw();fx($("qt"));fx($("opts"))}
@@ -570,7 +614,7 @@ function pick(b,k){
  $("pts").textContent="⭐ "+score;push();
  setTimeout(()=>{if(ended)return;i++;i<qs.length?ask():finish()},1100);
 }
-async function finish(){ended=true;
+async function finish(){ended=true;push();
  $("pb").style.width="100%";
  $("fs").textContent=score+"/"+qs.length;
  const p=score/qs.length;
@@ -579,9 +623,14 @@ async function finish(){ended=true;
  show("end");push();
 }
 async function begin(pool){
- const n=$("nick").value.trim();
+ const n=(savedDeviceNick||$("nick").value).trim();
  if(!n){$("err").textContent=tt("nn");$("nick").focus();return}
- $("err").textContent="";nick=n;qs=shuf(pool);i=0;score=0;ended=false;
+ if(!savedDeviceNick){
+  try{localStorage.setItem(DEVICE_NICK_KEY,n);savedDeviceNick=n;$("nick").value=n;$("nick").disabled=true;$("nick").title="This browser profile has already chosen its nickname."}
+  catch(e){$("err").textContent="Nickname could not be saved on this browser. Enable site storage and try again.";return}
+ }
+ $("err").textContent="";
+ nick=n;sentScore=-1;qs=shuf(pool);i=0;score=0;ended=false;
  $("who").textContent="👤 "+nick;show("quiz");ask();
 };
 $("start").onclick=()=>begin(QS);$("startps").onclick=()=>begin(PS);
@@ -597,6 +646,23 @@ function applyLang(){
 }
 $("lang").onclick=()=>{lang=lang==="en"?"od":"en";try{localStorage.setItem("pqzl",lang)}catch(e){}applyLang()};
 applyLang();
+if(savedDeviceNick){$("nick").value=savedDeviceNick;$("nick").disabled=true;$("nick").title="This browser profile has already chosen its nickname."}
 $("retry").onclick=connect;
 connect();
+// Realtime updates: refresh the leaderboard immediately whenever a row changes.
+// Keep a slow polling fallback in case Realtime is not enabled in Supabase.
+let realtimeChannel=null;
+try{
+ if(window.supabase?.createClient){
+  const realtimeClient=window.supabase.createClient(SUPABASE_URL,SUPABASE_PUBLISHABLE_KEY);
+  realtimeChannel=realtimeClient
+   .channel("leaderboard-live-updates")
+   .on("postgres_changes",{event:"*",schema:"public",table:"Leaderboard"},()=>connect())
+   .subscribe((state)=>{
+    if(state==="SUBSCRIBED")console.info("Leaderboard realtime connected");
+    else if(state==="CHANNEL_ERROR"||state==="TIMED_OUT")console.warn("Leaderboard realtime unavailable; polling fallback is active");
+   });
+ }
+}catch(error){console.warn("Realtime setup failed; polling fallback is active",error)}
+setInterval(connect,60000);
 </script></body></html>
